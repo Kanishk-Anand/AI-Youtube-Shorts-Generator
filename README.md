@@ -41,16 +41,21 @@ Built for creators, agencies, and developers who don't want to pay $20–$300/mo
 ## Features
 
 - **🎬 YouTube In, Vertical Out**: Hand it any YouTube URL — get back N viral-ready 9:16 mp4s
-- **🔀 Two Modes — API (fast) or Local (offline)**: Default `--mode api` uses MuAPI for download/transcription/cropping; `--mode local` runs entirely on your machine with `yt-dlp`, `faster-whisper`, and `ffmpeg`/`opencv`, and lets you pick OpenAI or a local Ollama model for highlight ranking
+- **🔀 Two Modes — API (fast) or Local (offline)**: Default `--mode api` uses MuAPI for download/transcription/cropping; `--mode local` runs on your machine with `yt-dlp`, `faster-whisper`, and `ffmpeg`/`opencv`, and works fully offline with a local Ollama model
 - **🤖 Virality-Aware Highlight Selection**: Clips ranked on hooks, emotional peaks, opinion bombs, revelation moments, conflict, quotable lines, story peaks, and practical value — not just generic "interesting"
 - **📈 Score + Hook + Reason for Every Clip**: Each highlight comes with a viral score, an opening hook line, and a one-sentence explanation of why it works
 - **🎤 Whisper Transcription, Your Choice**: Cloud (`/openai-whisper` via MuAPI) or local (`faster-whisper`, CPU or CUDA) — same downstream output shape
-- **🧩 Long-Video Aware**: Videos over 30 minutes are auto-chunked with overlap so nothing gets missed
+- **🔌 Pluggable LLM (local mode)**: Use Ollama, OpenAI, or any OpenAI-compatible server (LM Studio, vLLM, llama.cpp, OpenRouter, Groq) with `--llm`; the setup is checked before any slow step starts
+- **🧩 Long-Video Aware**: Videos over 30 minutes are split into 15-minute overlapping chunks, then the best candidates are re-ranked against each other in one extra call so scores are comparable across the whole video
+- **✂️ Clean Clip Boundaries**: Clips are kept between 20 and 180 seconds and snapped to transcript segment edges, so they don't start or end mid-sentence
 - **♻️ Smart Dedupe**: Overlapping highlights are collapsed by score so you never get two near-duplicate clips
-- **🎯 Smart Vertical Crop**: API mode uses MuAPI's auto-crop; local mode runs OpenCV face tracking with motion smoothing
+- **🎯 Smooth Vertical Crop**: API mode uses MuAPI's auto-crop; local mode smooths the face-tracking path (sparse detection, median filter, dead zone) so the frame doesn't shake, and encodes straight to H.264
+- **🧱 Layouts**: `face`, `center`, or `split` (the source on top, a webcam box or any video you choose below) for streams and gameplay
 - **📱 Any Aspect Ratio**: 9:16 for TikTok/Reels/Shorts, 1:1 for square, anything else by flag
 - **🧰 CLI + Python Library**: Use it from the shell or import `generate_shorts(...)` into your own pipeline
 - **📦 JSON Output**: `--output-json` dumps the full result (transcript + every candidate highlight + final clip URLs/paths) for downstream automation
+- **🔎 Critique Mode**: `--critique` reviews any existing video or short and tells you what works, what doesn't, and what to change
+- **🖥️ macOS and Windows**: `--doctor` checks your setup and prints the exact fix for your OS
 
 ## Quick Start (No Setup)
 
@@ -139,7 +144,7 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
 python main.py "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
-### Single video (Local mode — runs offline except for the LLM call)
+### Single video (Local mode — fully offline with Ollama)
 
 ```bash
 python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --mode local
@@ -216,6 +221,15 @@ xargs -a urls.txt -I{} python main.py "{}"
 | `--format` | `720` | Source download resolution: `360` / `480` / `720` / `1080` |
 | `--language` | auto | Force Whisper language code (e.g. `en`) |
 | `--output-json` | — | Dump the full result (transcript + all candidates) to a file |
+| `--llm` | `LLM_PROVIDER` or `openai` | Local mode / `--critique`: `ollama`, `openai`, or `openai_compatible` |
+| `--llm-model` | provider default | Model name for the chosen provider (overrides `LLM_MODEL`) |
+| `--layout` | `face` | Local mode framing: `face`, `center`, or `split` |
+| `--facecam X,Y,W,H` | — | Split layout: webcam box in the source video, in pixels |
+| `--bottom-video FILE` | — | Split layout: any video for the bottom panel (overrides `--facecam`) |
+| `--split-ratio` | `0.6` | Split layout: share of the height used by the top panel (0.3–0.8) |
+| `--critique` | off | Review an existing video or short instead of generating clips |
+| `--no-llm` | off | With `--critique`: measured checks only, no LLM review |
+| `--doctor` | off | Check this machine (Python, ffmpeg, dependencies, OpenCV, LLM) and print fixes |
 
 ### API mode vs Local mode
 
@@ -264,16 +278,49 @@ python main.py video.mp4 --mode local --bottom-video ~/Videos/filler.mp4 --split
 `--bottom-video` or `--facecam` on their own imply `--layout split`. The audio always comes from the source video.
 
 
+### Critique an existing video or short
+
+Give it a video you already made (a file or a YouTube URL) and it tells you what is working, what isn't, and what to change:
+
+```bash
+python main.py path/to/short.mp4 --critique
+python main.py short.mp4 --critique --llm ollama --llm-model qwen3:30b-a3b
+python main.py short.mp4 --critique --no-llm          # measured checks only
+```
+
+It combines two layers:
+
+- **Measured checks** (no LLM, fast): length, format and resolution, how soon the first words start, dead air, loudness and clipping, speech pace, filler words, visual variety, face size and position, and trailing silence. Each is marked ✓, `!` or ✗ with a one-line fix.
+- **An LLM review** of the transcript, grounded in those numbers: a hook verdict with a suggested rewrite, what works, what doesn't, and up to six changes ranked by impact, with timestamps. Anything it can't judge from the data is listed under "not assessed".
+
+```
+MEASURED CHECKS  (rules of thumb, not a prediction)
+  ✓ Length: 34s
+  ! Format: 404x720
+  ✓ First words begin at: 0.0s
+  ! Face on screen: in 80% of samples, median height 12% of frame
+CHANGE THESE FIRST
+  1. [high] @30s End on the 'she gave me up' line
+       why: last 4s trail off
+```
+
+What to keep in mind:
+
+- The thresholds are rules of thumb, **not a trained model, and there is no virality score**. Nothing here can predict views.
+- The LLM sees only the measured numbers and the transcript. It cannot see the picture, hear the audio, or read on-screen text, so captions, music and picture quality are not assessed.
+- Only the first 120 seconds are analysed. If the LLM is unavailable, you still get the measured checks.
+
 ## How It Works
 
-1. **Download**: Fetches the source video from YouTube
-2. **Transcribe**: MuAPI `/openai-whisper` produces a timestamped transcript (verbose_json segments)
+1. **Download**: API mode fetches the video via MuAPI. Local mode uses `yt-dlp` (HTTPS YouTube URLs only) or reads a file path you give it
+2. **Transcribe**: MuAPI `/openai-whisper`, or local `faster-whisper` (cached as an `.srt` file), produces a timestamped transcript
 3. **Detect content type**: An LLM classifies the video (podcast, interview, tutorial, vlog, etc.) and density, so the prompt can be tuned per content style
-4. **Long-video chunking**: Videos > 30 min are split into 20-min overlapping chunks
-5. **Highlight ranking**: An LLM scans the transcript through a virality framework — hook moments, emotional peaks, opinion bombs, revelations, conflict, quotables, story peaks, practical value — and emits ranked candidates with scores 0–100
+4. **Long-video chunking**: Videos > 30 min are split into 15-min overlapping chunks, with timestamps re-based per chunk. A chunk that fails is skipped instead of aborting the run
+5. **Highlight ranking**: An LLM scans the transcript through a virality framework — hook moments, emotional peaks, opinion bombs, revelations, conflict, quotables, story peaks, practical value — and returns scored candidates with a title, hook line and reason. The transcript is passed as quoted, untrusted data. Clips must be 20–180 seconds long and are snapped to transcript segment boundaries
 6. **Dedupe**: Overlapping candidates are collapsed by score (>50% overlap → keep the higher score)
-7. **Top-N selection**: The top `--num-clips` candidates are selected
-8. **Auto-crop**: Each highlight is rendered as a vertical short at the requested aspect ratio
+7. **Cross-chunk rerank** (long videos only): one extra call re-scores the best candidates against each other, because scores from separate chunks aren't comparable
+8. **Top-N selection**: The top `--num-clips` candidates are selected
+9. **Frame and render**: API mode uses MuAPI's `/autocrop`. Local mode renders with the chosen layout (`face`, `center` or `split`) through ffmpeg and OpenCV
 
 **Output**: a list of mp4 URLs plus, for each clip, its title, viral score, hook sentence, and a one-line reason explaining why it should perform.
 
@@ -321,17 +368,31 @@ Highlights:    7 candidates → kept top 3
 Edit `shorts_generator/highlights.py`:
 - **Virality framework**: `VIRALITY_CRITERIA` — the ranked list of signals the LLM optimizes for
 - **System prompt**: `HIGHLIGHT_SYSTEM_PROMPT` — duration sweet spot, hook rules, JSON schema
-- **Chunk size**: `CHUNK_SIZE_SECONDS` (default 1200) — chunk length for long videos
+- **Chunk size**: `CHUNK_SIZE_SECONDS` (default 900) — chunk length for long videos
 - **Long-video threshold**: `LONG_VIDEO_THRESHOLD` (default 1800) — videos longer than this are chunked
 - **Chunk overlap**: `CHUNK_OVERLAP_SECONDS` (default 60) — overlap between chunks so cross-boundary clips aren't missed
+- **Clip length**: `MIN_CLIP_SECONDS` (default 20) and `MAX_CLIP_SECONDS` (default 180) — clips outside this range are rejected and the model is asked again
+- **Rerank pool**: `RERANK_MIN_POOL` / `RERANK_MAX_POOL` (default 10 / 20) — how many candidates the cross-chunk rerank sees
 
 ### Polling / timeout
 Edit `shorts_generator/config.py` (or set env vars):
 - `MUAPI_POLL_INTERVAL` (default 5s) — seconds between job-status polls
-- `MUAPI_POLL_TIMEOUT` (default 1800s) — give up after this long
+- `MUAPI_POLL_TIMEOUT` (default 600s) — give up after this long
 
 ### Whisper transcription
-Audio is transcribed by MuAPI's `/openai-whisper` endpoint (server-side `whisper-1`). Pass `--language <code>` to lock the recognition to a specific language; otherwise it auto-detects.
+In API mode, audio is transcribed by MuAPI's `/openai-whisper` endpoint (server-side `whisper-1`). In local mode it runs `faster-whisper` on your machine: choose the size with `LOCAL_WHISPER_MODEL` (`tiny` … `large-v3`, default `base`) and the device with `LOCAL_WHISPER_DEVICE`. The model downloads once on first use. Pass `--language <code>` to lock the recognition to a specific language; otherwise it auto-detects.
+
+### Local-mode settings
+All are optional and can go in `.env` (see `.env.example`):
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` / `LLM_MODEL` | `openai` / provider default | Which LLM ranks highlights (also `--llm`, `--llm-model`) |
+| `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX` | `localhost:11434`, `qwen3.8:27b`, `16384` | Ollama server, model, and context window |
+| `LLM_BASE_URL`, `LLM_API_KEY` | — | `openai_compatible` server and optional key |
+| `LOCAL_WHISPER_MODEL`, `LOCAL_WHISPER_DEVICE` | `base`, `auto` | Transcription model and device |
+| `LOCAL_OUTPUT_DIR` | `output` | Where downloads, transcripts and clips are written |
+| `LOCAL_CROP_MODE`, `LOCAL_FACECAM`, `LOCAL_BOTTOM_VIDEO`, `LOCAL_SPLIT_RATIO` | `face`, —, —, `0.6` | Layout settings (same as the `--layout` flags) |
 
 ## Project Structure
 
@@ -339,24 +400,56 @@ Audio is transcribed by MuAPI's `/openai-whisper` endpoint (server-side `whisper
 AI-Youtube-Shorts-Generator/
 ├── main.py                       CLI entry point
 ├── requirements.txt              core deps (api mode)
-├── requirements-local.txt        optional deps for --mode local
+├── requirements-local.txt        optional deps for --mode local and --critique
 ├── .env.example
 └── shorts_generator/
-    ├── config.py                 env / settings (MuAPI + local LLM + Whisper)
+    ├── config.py                 env / settings (MuAPI + local LLM + Whisper + layout)
+    ├── url_validation.py         only HTTPS YouTube URLs are accepted as remote sources
     ├── muapi.py                  generic submit + poll wrapper
     ├── downloader.py             API mode: YouTube download via MuAPI
     ├── transcriber.py            API mode: MuAPI /openai-whisper client
-    ├── highlights.py             shared LLM virality ranking (pluggable backend)
+    ├── highlights.py             shared LLM virality ranking, chunking, rerank, clip-length rules
     ├── clipper.py                API mode: MuAPI /autocrop
+    ├── layout.py                 local-mode layout options (face / center / split)
+    ├── critique.py               --critique: measured checks + LLM review of an existing video
+    ├── doctor.py                 --doctor: setup checks with per-OS fixes
     ├── pipeline.py               mode dispatcher (api ↔ local)
-    └── local/                    --mode local backends (offline)
-        ├── downloader.py         yt-dlp download
-        ├── transcriber.py        faster-whisper transcription
-        ├── llm.py                OpenAI or Ollama client selector
-        └── clipper.py            ffmpeg cut + OpenCV vertical crop
+    └── local/                    --mode local backends
+        ├── downloader.py         yt-dlp download / local file handling
+        ├── transcriber.py        faster-whisper transcription (cached as .srt)
+        ├── llm.py                provider registry: openai, ollama, openai_compatible
+        ├── clipper.py            smoothed face tracking, split layout, ffmpeg render
+        └── system.py             ffmpeg detection, UTF-8 subprocess helper, install hints
 ```
 
 ## Troubleshooting
+
+### First, run the doctor
+```bash
+python main.py --doctor
+```
+It checks Python, ffmpeg, every dependency, OpenCV, the `av` compatibility problem and your LLM provider, and prints the exact fix for each failure on your OS.
+
+### `open() got an unexpected keyword argument 'metadata_errors'`
+`faster-whisper` is paired with a too-new `av`. Run `pip install "av>=14,<16"`.
+
+### `module 'cv2' has no attribute 'CascadeClassifier'`
+OpenCV 5.x removed the face detector this project uses. Run `pip install "opencv-python>=4.8,<5"`.
+
+### Installing fails while building `av` ("pkg-config is required")
+Your Python is too new for prebuilt wheels. Use Python 3.12 in a fresh virtual environment (see Installation).
+
+### The crop shakes, or follows the wrong thing
+Face tracking suits talking heads. For gameplay or streams with a webcam overlay, use `--layout center`, or `--layout split --facecam X,Y,W,H` to show the game and the webcam together.
+
+### Ollama is slow, times out, or never answers
+Check `ollama ps`: a large model already loaded (or busy with another job) blocks new requests. Long transcripts need a context window that fits them, so raise `OLLAMA_NUM_CTX` if highlights look truncated. The model must be pulled first (`ollama pull <model>`); the run checks this before starting.
+
+### The YouTube download stalls or times out
+Re-run the same command: `yt-dlp` resumes the partial file. A lower `--format` such as `480` also helps. To test the pipeline quickly, download just a section with `yt-dlp --download-sections "*0:00-15:00" ...` and pass that file instead.
+
+### "You are sending unauthenticated requests to the HF Hub"
+Harmless. It appears while `faster-whisper` downloads its model on first use. A token is only needed for higher rate limits.
 
 ### Whisper produced no segments
 The video may have no detectable speech, or it may be in a language Whisper struggles with. Try passing `--language en` (or the correct ISO-639-1 code) to skip auto-detection.
