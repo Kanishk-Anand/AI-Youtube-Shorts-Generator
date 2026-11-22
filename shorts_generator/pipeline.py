@@ -3,15 +3,16 @@
 Two modes:
   * mode="api"   (default) — MuAPI does download / transcribe / LLM / autocrop.
                               Fast, no local deps, pay-per-call.
-  * mode="local"            — yt-dlp + faster-whisper + OpenAI or Gemini + ffmpeg/opencv.
-                              Self-hosted, LLM_PROVIDER selects OpenAI or Gemini.
+  * mode="local"            — yt-dlp + faster-whisper + OpenAI or Ollama + ffmpeg/opencv.
+                              Self-hosted, LLM_PROVIDER selects OpenAI or Ollama.
 """
 from typing import Dict, List, Optional
 
 from .clipper import crop_highlights
-from .config import LLM_PROVIDER, require_api_key, require_gemini_key, require_openai_key
+from .config import require_api_key
 from .downloader import download_youtube
 from .highlights import call_muapi_llm, get_highlights
+from .layout import Layout
 from .transcriber import transcribe
 
 
@@ -21,12 +22,18 @@ def _run_local(
     aspect_ratio: str,
     download_format: str,
     language: Optional[str],
+    layout: Optional[Layout] = None,
 ) -> Dict:
     from .local.clipper import crop_highlights_local
     from .local.downloader import download_youtube_local
-    from .local.llm import call_local_llm
+    from .local.llm import call_local_llm, describe, validate
     from .local.transcriber import transcribe_local
 
+    layout = (layout or Layout.from_config()).validate()  # fail fast, before the slow steps
+    from .local.system import ensure_ffmpeg
+    ensure_ffmpeg()  # missing ffmpeg? say so now, not after the download
+    validate()  # LLM misconfigured? fail now, not after the download and transcription
+    print(f"[llm] {describe()}", flush=True)
     source_path = download_youtube_local(youtube_url, fmt=download_format)
 
     transcript = transcribe_local(source_path, language=language)
@@ -43,7 +50,7 @@ def _run_local(
     top = sorted(all_highlights, key=lambda h: int(h.get("score", 0)), reverse=True)[:num_clips]
     print(f"[pipeline/local] cropping {len(top)} of {len(all_highlights)} candidates", flush=True)
 
-    shorts = crop_highlights_local(source_path, top, aspect_ratio=aspect_ratio)
+    shorts = crop_highlights_local(source_path, top, aspect_ratio=aspect_ratio, layout=layout)
 
     return {
         "mode": "local",
@@ -95,6 +102,7 @@ def generate_shorts(
     download_format: str = "720",
     language: Optional[str] = None,
     mode: str = "api",
+    layout: Optional[Layout] = None,
 ) -> Dict:
     """Run the full pipeline and return a structured result.
 
@@ -105,7 +113,9 @@ def generate_shorts(
         download_format: source resolution ("360" / "480" / "720" / "1080").
         language: ISO-639-1 to force Whisper language detection.
         mode: "api" (default, MuAPI) or "local" (yt-dlp + faster-whisper +
-            OpenAI or Gemini + ffmpeg).
+            OpenAI or Ollama + ffmpeg).
+        layout: local mode only — how clips are framed (see shorts_generator.layout).
+            Defaults to the LOCAL_CROP_MODE / LOCAL_FACECAM / LOCAL_BOTTOM_VIDEO env settings.
 
     Returns:
         {
@@ -118,14 +128,9 @@ def generate_shorts(
     """
     mode = (mode or "api").lower()
     if mode == "local":
-        provider = (LLM_PROVIDER or "openai").strip().lower()
-        if provider == "openai":
-            require_openai_key()
-        elif provider == "gemini":
-            require_gemini_key()
-        else:
-            raise RuntimeError(f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'.")
-        return _run_local(youtube_url, num_clips, aspect_ratio, download_format, language)
+        return _run_local(youtube_url, num_clips, aspect_ratio, download_format, language, layout)
+    if layout is not None:
+        raise ValueError("layout options only apply to --mode local.")
     if mode == "api":
         require_api_key()
         return _run_api(youtube_url, num_clips, aspect_ratio, download_format, language)

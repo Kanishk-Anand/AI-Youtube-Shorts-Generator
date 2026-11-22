@@ -49,14 +49,30 @@ POLL_TIMEOUT_SECONDS = float(os.getenv("MUAPI_POLL_TIMEOUT", "600"))
 # Local-mode (--mode local) settings — only consulted when running offline.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.8:27b")
+# Ollama's default context window is small and silently truncates long prompts,
+# so set it explicitly. A 20-min transcript chunk is roughly 8-10k tokens.
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT", "600"))
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+# Provider-neutral overrides (see shorts_generator/local/llm.py)
+LLM_MODEL = os.getenv("LLM_MODEL", "").strip()          # overrides the selected provider's model
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip().rstrip("/")  # for LLM_PROVIDER=openai_compatible
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()      # optional; local servers usually need none
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT", "300"))
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip()  # optional, for the openai provider
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
 LOCAL_OUTPUT_DIR = os.path.abspath(
     os.path.expanduser(os.getenv("LOCAL_OUTPUT_DIR", "output").strip() or "output")
 )
+# face = track the speaker; center = fixed centre crop (no tracking, no shake)
+LOCAL_CROP_MODE = os.getenv("LOCAL_CROP_MODE", "face").strip().lower()
+# Split layout (LOCAL_CROP_MODE=split): gameplay on top, a second panel below.
+LOCAL_FACECAM = os.getenv("LOCAL_FACECAM", "").strip()            # "x,y,w,h" box in the source video
+LOCAL_BOTTOM_VIDEO = os.getenv("LOCAL_BOTTOM_VIDEO", "").strip()  # any video file; overrides the facecam
+LOCAL_SPLIT_RATIO = float(os.getenv("LOCAL_SPLIT_RATIO", "0.6"))  # fraction of the height for the top panel
 
 # VAD (Voice Activity Detection) settings for faster-whisper
 # Default threshold is 0.5; lower = more sensitive, higher = less sensitive
@@ -122,14 +138,4 @@ def require_openai_key() -> str:
         "Local mode needs an OpenAI key for highlight ranking. Add it to your .env or export it, "
         "or switch back to --mode api.",
         expected_prefix="sk-",
-    )
-
-
-def require_gemini_key() -> str:
-    return _require_key(
-        GEMINI_API_KEY,
-        "GEMINI_API_KEY",
-        "Local mode needs a Gemini key when LLM_PROVIDER=gemini. Add it to your .env or export it, "
-        "or switch LLM_PROVIDER back to openai.",
-        expected_prefix="AIza",
     )

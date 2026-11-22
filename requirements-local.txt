@@ -3,8 +3,10 @@
 # Optional dependencies for --mode local.
 yt-dlp>=2024.1.1
 faster-whisper>=1.0.0
+# faster-whisper passes av.open(metadata_errors=...), which av>=16 rejects.
+av>=14,<16
 openai>=1.0.0
-google-genai>=1.0.0
-opencv-python>=4.8.0
+# OpenCV 5.x removed cv2.CascadeClassifier, which local/clipper.py uses for face tracking.
+opencv-python>=4.8,<5
 # torch is only needed if you want CUDA Whisper. CPU works without it.
 # torch>=2.0

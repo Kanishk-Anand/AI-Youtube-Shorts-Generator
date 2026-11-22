@@ -6,7 +6,8 @@ directly off disk.
 import os
 import re
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
+from urllib.request import url2pathname
 from typing import Optional
 
 from ..config import LOCAL_OUTPUT_DIR
@@ -61,9 +62,10 @@ def _resolve_local_path(source: str) -> Optional[str]:
     """Return a local filesystem path if the input already points at one."""
     parsed = urlparse(source)
     if parsed.scheme == "file":
-        raw_path = unquote(parsed.path)
+        # url2pathname unquotes and, on Windows, turns "/C:/Users/me/a.mp4" into "C:\\Users\\me\\a.mp4".
+        raw_path = url2pathname(parsed.path)
         if parsed.netloc and parsed.netloc not in ("", "localhost"):
-            raw_path = f"//{parsed.netloc}{raw_path}"
+            raw_path = (f"\\\\{parsed.netloc}{raw_path}" if os.name == "nt" else f"//{parsed.netloc}{raw_path}")
         candidate = Path(raw_path).expanduser()
         if candidate.exists() and candidate.is_file():
             return str(candidate.resolve())

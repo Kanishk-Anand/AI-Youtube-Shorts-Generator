@@ -41,7 +41,7 @@ Built for creators, agencies, and developers who don't want to pay $20–$300/mo
 ## Features
 
 - **🎬 YouTube In, Vertical Out**: Hand it any YouTube URL — get back N viral-ready 9:16 mp4s
-- **🔀 Two Modes — API (fast) or Local (offline)**: Default `--mode api` uses MuAPI for download/transcription/cropping; `--mode local` runs entirely on your machine with `yt-dlp`, `faster-whisper`, and `ffmpeg`/`opencv`, and lets you pick OpenAI or Gemini for highlight ranking
+- **🔀 Two Modes — API (fast) or Local (offline)**: Default `--mode api` uses MuAPI for download/transcription/cropping; `--mode local` runs entirely on your machine with `yt-dlp`, `faster-whisper`, and `ffmpeg`/`opencv`, and lets you pick OpenAI or a local Ollama model for highlight ranking
 - **🤖 Virality-Aware Highlight Selection**: Clips ranked on hooks, emotional peaks, opinion bombs, revelation moments, conflict, quotable lines, story peaks, and practical value — not just generic "interesting"
 - **📈 Score + Hook + Reason for Every Clip**: Each highlight comes with a viral score, an opening hook line, and a one-sentence explanation of why it works
 - **🎤 Whisper Transcription, Your Choice**: Cloud (`/openai-whisper` via MuAPI) or local (`faster-whisper`, CPU or CUDA) — same downstream output shape
@@ -62,9 +62,9 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.10 to 3.13 (3.12 recommended; newer versions often lack prebuilt wheels for `av`, `ctranslate2` and OpenCV)
 - For **API mode (default)**: a MuAPI key — powers download, transcription, highlight ranking, and clipping in a single dependency
-- For **Local mode** (`--mode local`): `ffmpeg` on your PATH and an LLM API key (`OPENAI_API_KEY` or `GEMINI_API_KEY`; only the LLM step is remote)
+- For **Local mode** (`--mode local`): `ffmpeg` on your PATH and either an `OPENAI_API_KEY` or a running Ollama server (`ollama serve`)
 
 ### Steps
 
@@ -74,20 +74,35 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
    cd AI-Youtube-Shorts-Generator
    ```
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python3.10 -m venv venv
-   source venv/bin/activate
-   ```
+2. **Install Python 3.12 and ffmpeg** (ffmpeg is only needed for `--mode local` and `--critique`):
 
-3. **Install Python dependencies:**
+   | | Command |
+   |---|---|
+   | macOS (Homebrew) | `brew install python@3.12 ffmpeg` |
+   | Windows (PowerShell) | `winget install Python.Python.3.12 Gyan.FFmpeg`, then open a **new** terminal |
+
+3. **Create and activate a virtual environment:**
+
+   macOS / Linux:
+   ```bash
+   python3.12 -m venv .venv
+   source .venv/bin/activate
+   ```
+   Windows (PowerShell):
+   ```powershell
+   py -3.12 -m venv .venv
+   .venv\Scripts\Activate.ps1
+   ```
+   If PowerShell refuses to run the script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. In `cmd.exe` use `.venv\Scripts\activate.bat`.
+
+4. **Install Python dependencies:**
    ```bash
    pip install -r requirements.txt
-   # Only if you plan to use --mode local:
+   # Only if you plan to use --mode local or --critique:
    pip install -r requirements-local.txt
    ```
 
-4. **Set up environment variables:**
+5. **Set up environment variables:**
 
    Create a `.env` file in the project root:
    ```bash
@@ -95,15 +110,26 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
    MUAPI_API_KEY=your_muapi_key_here
 
    # Local mode (--mode local)
-   LLM_PROVIDER=openai         # openai or gemini
+   LLM_PROVIDER=openai         # openai or ollama
    OPENAI_API_KEY=your_openai_key_here
    OPENAI_MODEL=gpt-4o-mini          # optional, default gpt-4o-mini
-   GEMINI_API_KEY=your_gemini_key_here
-   GEMINI_MODEL=gemini-2.5-flash      # optional, default gemini-2.5-flash
+   OLLAMA_BASE_URL=http://localhost:11434   # optional
+   OLLAMA_MODEL=qwen3.8:27b           # optional, any model from `ollama list`
+   OLLAMA_NUM_CTX=16384               # optional, context window (default 16384)
    LOCAL_WHISPER_MODEL=base          # tiny / base / small / medium / large-v3
    LOCAL_WHISPER_DEVICE=auto         # auto / cpu / cuda
    LOCAL_OUTPUT_DIR=output           # where local mp4s land
    ```
+
+   The `.env` file works the same on macOS and Windows and is the easiest place for settings. On Windows write paths with forward slashes (`LOCAL_BOTTOM_VIDEO=C:/Videos/filler.mp4`) or without quotes; backslashes inside quotes are treated as escapes.
+
+6. **Check your setup:**
+   ```bash
+   python main.py --doctor
+   ```
+   It checks Python, ffmpeg, the dependencies, OpenCV and your LLM provider, and prints the exact command to fix anything missing for your OS.
+
+> **Command syntax.** The examples use macOS/Linux shell syntax. `\` continues a long command onto the next line there; in PowerShell use a backtick (`` ` ``) or put the command on one line, and in `cmd.exe` use `^`. To set an option for a single run, put it in `.env`, or: macOS/Linux `LLM_PROVIDER=ollama python main.py ...`, PowerShell `$env:LLM_PROVIDER="ollama"; python main.py ...`, cmd.exe `set LLM_PROVIDER=ollama && python main.py ...`.
 
 ## Usage
 
@@ -123,9 +149,11 @@ Local mode writes the rendered shorts to `./output/short_01.mp4`, `short_02.mp4`
 
 ### Security notes
 
-- Replace the example API key values in `.env.example` before running a mode that uses them. The app rejects empty, placeholder, and short keys before it starts downloading or processing a video; OpenAI and Gemini keys are also checked for their provider prefix.
+- Replace the example API key values in `.env.example` before running a mode that uses them. The app rejects empty, placeholder, and short keys before it starts downloading or processing a video; OpenAI keys are also checked for their `sk-` prefix.
 - Remote video URLs must use HTTPS and an exact YouTube or `youtu.be` hostname. Local mode also accepts a local path or `file://` URL for trusted, single-user use.
 - If you expose this library through a web service, validate user input at the service boundary: accept only approved YouTube URLs and do not pass user-supplied paths or `file://` URLs to local mode. The library intentionally supports local files for CLI use.
+- `LLM_BASE_URL` and `OPENAI_BASE_URL` must be http(s) URLs without embedded credentials, and an API key is never sent over plain HTTP to a non-local host.
+- All transcript text is passed to the LLM as quoted, untrusted data (highlight ranking, reranking and `--critique`); model output is stripped of control characters before it is printed.
 - `MUAPI_BASE_URL` must use HTTPS and the host `api.muapi.ai`. Other hosts are rejected because requests include the configured `MUAPI_API_KEY`.
 
 ### With options
@@ -162,8 +190,8 @@ for short in result["shorts"]:
     print(short["score"], short["title"], short["clip_url"])
 ```
 
-Local transcription is cached as an `.srt` file in `LOCAL_OUTPUT_DIR` using the
-video's base name. If the cache already exists and is newer than the source
+Local transcription is cached as an `.srt` file in `LOCAL_OUTPUT_DIR` named after the
+video plus a short hash of its full path (so same-named files never share a transcript). If the cache already exists and is newer than the source
 file, the app reuses it instead of running Whisper again.
 
 Local downloads are also cached in `LOCAL_OUTPUT_DIR` as
@@ -195,10 +223,46 @@ xargs -a urls.txt -I{} python main.py "{}"
 |---|---|---|
 | Download | MuAPI `/youtube-download` | `yt-dlp` for remote URLs, direct file path for local inputs |
 | Transcription | MuAPI `/openai-whisper` | `faster-whisper` (CPU or CUDA) |
-| Highlight LLM | MuAPI `gpt-5-mini` | `LLM_PROVIDER=openai` uses OpenAI (`gpt-4o-mini` by default), `LLM_PROVIDER=gemini` uses Gemini (`gemini-2.5-flash` by default) |
+| Highlight LLM | MuAPI `gpt-5-mini` | `LLM_PROVIDER=openai` uses OpenAI (`gpt-4o-mini` by default), `LLM_PROVIDER=ollama` uses a local Ollama model (`qwen3.8:27b` by default) |
 | Vertical crop | MuAPI `/autocrop` | `ffmpeg` + OpenCV face tracking |
 | Output | hosted URLs | local mp4 paths |
-| Required keys | `MUAPI_API_KEY` | `OPENAI_API_KEY` or `GEMINI_API_KEY` (+ `ffmpeg` on PATH) |
+| Required keys | `MUAPI_API_KEY` | `OPENAI_API_KEY` or a running Ollama server (+ `ffmpeg` on PATH) |
+
+#### Choosing the LLM (local mode and `--critique`)
+
+The LLM that ranks highlights and writes the critique is pluggable. Pick it with `LLM_PROVIDER` or `--llm`, and its model with `LLM_MODEL` or `--llm-model`:
+
+| Provider | Talks to | Needs |
+|---|---|---|
+| `openai` | OpenAI (official SDK) | `OPENAI_API_KEY`, optional `OPENAI_MODEL`, `OPENAI_BASE_URL` |
+| `ollama` | a local Ollama server | `OLLAMA_MODEL` (checked against `ollama list` before the run), `OLLAMA_NUM_CTX` |
+| `openai_compatible` | any server with `/chat/completions`: LM Studio, vLLM, llama.cpp, OpenRouter, Groq, ... | `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY` |
+
+```bash
+python main.py video.mp4 --mode local --llm ollama --llm-model qwen3:30b-a3b
+python main.py video.mp4 --mode local --llm openai_compatible --llm-model llama-3.3-70b   # LLM_BASE_URL in .env
+```
+
+The provider is checked before the download and transcription start, so a typo or missing key fails in seconds. To add a provider, write one function in `shorts_generator/local/llm.py` that takes a prompt and returns text, and register it with `@provider(...)`.
+
+#### Local-mode layouts
+
+`--layout face|center|split` (or `LOCAL_CROP_MODE`) controls how clips are framed in `--mode local`:
+
+- `face` (default): follows the speaker's face with a smoothed crop. Best for podcasts and talking heads.
+- `center`: fixed centre crop, no tracking.
+- `split`: two panels stacked vertically. The source video is on top and the bottom panel is either a box cut out of the source (the streamer's webcam) or any video you supply.
+
+```bash
+# Streamer webcam box (x,y,w,h in source pixels) under the gameplay
+python main.py video.mp4 --mode local --layout split --facecam 0,305,260,165
+
+# Any other video below (looped or trimmed to the clip length; its audio is ignored)
+python main.py video.mp4 --mode local --bottom-video ~/Videos/filler.mp4 --split-ratio 0.55
+```
+
+`--bottom-video` or `--facecam` on their own imply `--layout split`. The audio always comes from the source video.
+
 
 ## How It Works
 
@@ -288,7 +352,7 @@ AI-Youtube-Shorts-Generator/
     └── local/                    --mode local backends (offline)
         ├── downloader.py         yt-dlp download
         ├── transcriber.py        faster-whisper transcription
-        ├── llm.py                OpenAI or Gemini client selector
+        ├── llm.py                OpenAI or Ollama client selector
         └── clipper.py            ffmpeg cut + OpenCV vertical crop
 ```
 

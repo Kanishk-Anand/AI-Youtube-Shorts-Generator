@@ -3,6 +3,7 @@
 Reads a local media file and returns the same shape the highlight generator
 expects: {duration, segments[start, end, text]}.
 """
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -15,7 +16,10 @@ def _transcript_cache_path(media_path: str) -> Path:
     """Return the .srt cache path for a media file."""
     cache_dir = Path(LOCAL_OUTPUT_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / (Path(media_path).stem + ".srt")
+    # Include a short hash of the full path: different videos often share a filename
+    # (e.g. short_01.mp4), and a stem-only cache would reuse the wrong transcript.
+    tag = hashlib.sha1(str(Path(media_path).resolve()).encode()).hexdigest()[:8]
+    return cache_dir / f"{Path(media_path).stem}.{tag}.srt"
 
 
 def _format_srt_timestamp(seconds: float) -> str:

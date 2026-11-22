@@ -1,6 +1,6 @@
 """Local-mode backends — no MuAPI calls, runs on your machine.
 
 Used when the pipeline is invoked with mode="local". Requires the optional
-deps in requirements-local.txt (yt-dlp, faster-whisper, openai, google-genai,
-opencv, moviepy) plus an LLM API key for highlight ranking.
+deps in requirements-local.txt (yt-dlp, faster-whisper, openai,
+opencv, moviepy) plus an OpenAI key or a running Ollama server for highlight ranking.
 """
