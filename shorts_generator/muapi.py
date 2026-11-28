@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from . import jobs
 from .config import (
     MUAPI_BASE_URL,
     POLL_INTERVAL_SECONDS,
@@ -69,10 +70,12 @@ def poll(
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
+        jobs.checkpoint()
         data = fetch_result(request_id)
         status = (data.get("status") or "").lower()
         if status and status != last_status:
             print(f"[muapi] {label or request_id}: {status}", flush=True)
+            jobs.emit("api", "progress", f"{label or request_id}: {status}")
             last_status = status
 
         if status in ("completed", "succeeded", "success"):
@@ -80,7 +83,7 @@ def poll(
         if status in ("failed", "error"):
             raise MuAPIError(f"{label or request_id} failed: {data}")
 
-        time.sleep(interval)
+        jobs.sleep(interval)  # wakes immediately if the job is cancelled
 
     raise MuAPIError(f"{label or request_id} timed out after {timeout}s")
 

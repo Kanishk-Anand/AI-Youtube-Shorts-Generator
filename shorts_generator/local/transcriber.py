@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Dict, Optional
 
+from .. import jobs
 from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL
 
 
@@ -101,6 +102,7 @@ def _resolve_device() -> str:
 
 def transcribe_local(media_path: str, language: Optional[str] = None) -> Dict:
     """Run faster-whisper on a local file path, caching the result as .srt."""
+    jobs.emit("transcribe", "start", "Preparing transcription")
     cache_path = _transcript_cache_path(media_path)
     if cache_path.exists():
         source_mtime = os.path.getmtime(media_path)
@@ -118,6 +120,7 @@ def transcribe_local(media_path: str, language: Optional[str] = None) -> Dict:
                     f"{cached['duration']:.0f}s of audio",
                     flush=True,
                 )
+                jobs.emit("transcribe", "done", f"{len(cached['segments'])} segments (cached)")
                 return cached
 
     try:
@@ -150,17 +153,22 @@ def transcribe_local(media_path: str, language: Optional[str] = None) -> Dict:
 
     segments_iter, info = model.transcribe(**transcribe_kwargs)
 
+    audio_seconds = float(getattr(info, "duration", 0.0)) or None
+    jobs.emit("transcribe", "progress", "Transcribing", current=0.0, total=audio_seconds)
     segments = []
     for s in segments_iter:
+        jobs.checkpoint()
         segments.append({
             "start": float(s.start),
             "end": float(s.end),
             "text": (s.text or "").strip(),
         })
+        jobs.emit("transcribe", "progress", current=float(s.end), total=audio_seconds)
 
     duration = float(getattr(info, "duration", 0.0)) or (segments[-1]["end"] if segments else 0.0)
     print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
     transcript = {"duration": duration, "segments": segments}
+    jobs.emit("transcribe", "done", f"{len(segments)} segments")
     cache_path = _write_srt_cache(media_path, transcript)
     print(f"[transcribe/local] wrote cache: {cache_path}", flush=True)
     return transcript

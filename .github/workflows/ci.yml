@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12"]
+        include:
+          # The oldest and newest supported Pythons, on one OS to keep the matrix small.
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The ffmpeg-based tests render real video, so the runners need a real ffmpeg.
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Show tool versions
+        run: |
+          python --version
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Install the package with its local and dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[local,dev]"
+
+      - name: Run the tests
+        run: python -m pytest
+
+  installers:
+    # Runs the real one-click installers, so the Windows script is exercised on Windows.
+    name: installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Run the macOS installer
+        if: runner.os == 'macOS'
+        run: bash installers/install.sh --no-link
+      - name: Run the Windows installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\installers\install.ps1
+
+      - name: The launcher works without activating the environment (macOS)
+        if: runner.os == 'macOS'
+        run: ./shorts --version
+      - name: The launcher works without activating the environment (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: shorts.cmd --version
+
+  build:
+    name: build and install the wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install the wheel into a clean environment and run it from elsewhere
+        run: |
+          python -m venv "$RUNNER_TEMP/clean"
+          "$RUNNER_TEMP/clean/bin/pip" install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/clean/bin/shorts" --version
+          "$RUNNER_TEMP/clean/bin/python" -c "from shorts_generator import paths; assert 'LLM_PROVIDER' in paths.env_template()"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

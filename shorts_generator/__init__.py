@@ -1,3 +1,6 @@
-from .pipeline import generate_shorts
+__version__ = "0.2.0"
 
-__all__ = ["generate_shorts"]
+from .jobs import CancelledError, Job, ProgressEvent
+from .pipeline import generate_shorts, start_job
+
+__all__ = ["generate_shorts", "start_job", "Job", "ProgressEvent", "CancelledError", "__version__"]

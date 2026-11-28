@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from typing import List
 
+from .. import jobs
+
 FFMPEG_HINT = {
     "mac": "brew install ffmpeg",
     "windows": "winget install Gyan.FFmpeg   (then open a new terminal)   or: choco install ffmpeg",
@@ -28,6 +30,24 @@ def run_text(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     (cp1252 on Windows) and can raise on non-ASCII file names. Undecodable bytes are replaced.
     """
     return subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace", **kwargs)
+
+
+def run_cancellable(cmd: List[str], poll_seconds: float = 0.25) -> subprocess.CompletedProcess:
+    """Like run_text, but the running job's cancel request kills the process within ~poll_seconds."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            encoding="utf-8", errors="replace")
+    try:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=poll_seconds)  # retrying after a timeout loses no output
+                break
+            except subprocess.TimeoutExpired:
+                jobs.checkpoint()  # raises CancelledError when the job was cancelled
+    except BaseException:
+        proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def ensure_ffmpeg() -> None:

@@ -6,3 +6,7 @@ venv/
 output/
 *.mp4
 .DS_Store
+*.egg-info/
+build/
+dist/
+.pytest_cache/

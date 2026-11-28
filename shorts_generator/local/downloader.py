@@ -10,8 +10,17 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import url2pathname
 from typing import Optional
 
+from .. import jobs
 from ..config import LOCAL_OUTPUT_DIR
 from ..url_validation import validate_youtube_url
+
+
+def _progress_hook(d: dict) -> None:
+    """yt-dlp progress callback: report progress and let a cancel abort the download."""
+    jobs.checkpoint()
+    if d.get("status") == "downloading":
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        jobs.emit("download", "progress", current=d.get("downloaded_bytes"), total=total, speed=d.get("speed"))
 
 
 def _import_ytdlp():
@@ -98,6 +107,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
     local_path = _resolve_local_path(video_url)
     if local_path:
         print(f"[download/local] using local file: {local_path}", flush=True)
+        jobs.emit("download", "done", "Using a local file", path=local_path)
         return local_path
 
     video_url = validate_youtube_url(video_url)
@@ -111,9 +121,11 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         cached = _existing_download(out_dir, video_id)
         if cached:
             print(f"[download/local] reusing cached download: {cached}", flush=True)
+            jobs.emit("download", "done", "Reusing a cached download", path=cached)
             return cached
 
     print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)
+    jobs.emit("download", "start", f"Downloading at {fmt}p")
     ydl_opts = {
         "format": _format_for(fmt),
         "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
@@ -121,6 +133,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "progress_hooks": [_progress_hook],
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -135,4 +148,5 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
                     break
 
     print(f"[download/local] ready: {path}", flush=True)
+    jobs.emit("download", "done", "Downloaded", path=path)
     return path

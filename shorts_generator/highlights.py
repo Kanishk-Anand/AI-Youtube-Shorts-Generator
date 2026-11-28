@@ -15,7 +15,7 @@ import re
 from bisect import bisect_left, bisect_right
 from typing import Callable, Dict, List, Optional
 
-from . import muapi
+from . import jobs, muapi
 
 
 LLMFn = Callable[[str], str]
@@ -222,6 +222,7 @@ def _sanitize_highlights(
 
 def detect_content_type(transcript: Dict, llm_fn: LLMFn = call_muapi_llm) -> Dict[str, str]:
     segments = transcript.get("segments", [])
+    jobs.checkpoint()
     sample = " ".join(s["text"] for s in segments[:25])[:3000]
     prompt = (
         f"{CONTENT_TYPE_PROMPT}\n\n"
@@ -300,6 +301,7 @@ def call_highlight_api(
     min_dur, max_dur = _clip_limits(duration)
 
     for attempt in range(1, MAX_HIGHLIGHT_API_ATTEMPTS + 1):
+        jobs.checkpoint()
         try:
             raw = llm_fn(prompt)
             parsed = _parse_json_loose(raw)
@@ -429,6 +431,7 @@ def rerank_highlights(
 
     scores: Dict[int, int] = {}
     for attempt in range(1, MAX_HIGHLIGHT_API_ATTEMPTS + 1):
+        jobs.checkpoint()
         try:
             parsed = _parse_json_loose(llm_fn(prompt))
             for r in parsed.get("rankings") or []:
@@ -477,6 +480,7 @@ def get_highlights(
     mode passes in a local LLM-backed callable.
     """
     llm_fn = llm_fn or call_muapi_llm
+    jobs.emit("highlights", "start", "Finding highlights")
     duration = transcript.get("duration", 0)
     content_info = detect_content_type(transcript, llm_fn=llm_fn)
     print(f"[highlights] content={content_info.get('content_type')} density={content_info.get('density')} duration={duration:.0f}s", flush=True)
@@ -489,6 +493,8 @@ def get_highlights(
             offset = chunk.get("_offset", 0)
             text = build_transcript_text(chunk)
             print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
+            jobs.checkpoint()
+            jobs.emit("highlights", "progress", f"Chunk {i + 1} of {len(chunks)}", current=i, total=len(chunks))
             try:
                 result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn, segments=chunk["segments"])
             except RuntimeError as e:
@@ -503,10 +509,13 @@ def get_highlights(
             raise RuntimeError("Highlight generator failed on every chunk of the video.")
         highlights = dedupe_highlights(all_highlights)
         if len(chunks) > 1 and len(highlights) > num_clips:
+            jobs.emit("rerank", "start", "Re-ranking candidates across chunks")
             highlights = rerank_highlights(highlights, transcript, num_clips, content_info, llm_fn)
+            jobs.emit("rerank", "done", "Re-ranked")
     else:
         text = build_transcript_text(transcript)
         result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn, segments=transcript.get("segments"))
         highlights = dedupe_highlights(result.get("highlights", []))
 
+    jobs.emit("highlights", "done", f"{len(highlights)} candidates", count=len(highlights))
     return {"highlights": highlights}

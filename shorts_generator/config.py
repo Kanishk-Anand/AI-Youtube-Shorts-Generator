@@ -2,9 +2,11 @@ import os
 import re
 from urllib.parse import urlsplit
 
-from dotenv import load_dotenv
+from . import paths
 
-load_dotenv()
+# Settings files, highest priority first: current folder, project folder, user config folder.
+# Real environment variables always win. See shorts_generator/paths.py.
+LOADED_ENV_FILES = paths.load_env_files()
 
 MUAPI_API_KEY = os.getenv("MUAPI_API_KEY", "").strip()
 

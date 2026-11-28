@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, List, Tuple
 
-from . import config
+from . import config, paths
 from .local.system import FFMPEG_HINT, PYTHON_HINT, os_name, run_text
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -124,6 +124,14 @@ def check_output_dir() -> Result:
         return FAIL, "Output folder", f"{d}: {e}", "Set LOCAL_OUTPUT_DIR to a folder you can write to"
 
 
+def check_config() -> Result:
+    loaded = config.LOADED_ENV_FILES
+    if loaded:
+        return OK, "Settings", ", ".join(str(p) for p in loaded), ""
+    return (WARN, "Settings", "no .env settings file found (built-in defaults apply)",
+            f"Run `shorts --init-config` to create {paths.user_env_file()}")
+
+
 def check_paths() -> List[Result]:
     cwd = str(Path.cwd())
     if os_name() == "windows" and not cwd.isascii():
@@ -166,7 +174,7 @@ def run_doctor() -> int:
     print(f"System: {os_name()} ({sys.platform}), Python {sys.version.split()[0]}\n")
     results: List[Result] = []
     for check in (check_python, check_venv, check_ffmpeg, check_imports, check_opencv_faces, check_av_compat,
-                  check_output_dir, check_paths, check_whisper_cache, check_llm, check_muapi):
+                  check_output_dir, check_config, check_paths, check_whisper_cache, check_llm, check_muapi):
         r = check()
         results += r if isinstance(r, list) else [r]
 

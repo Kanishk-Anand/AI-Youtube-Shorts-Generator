@@ -19,9 +19,10 @@ import os
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
+from .. import jobs
 from ..config import LOCAL_OUTPUT_DIR
 from ..layout import Layout
-from .system import ensure_ffmpeg, run_text
+from .system import ensure_ffmpeg, run_cancellable, run_text
 
 
 def _ratio(aspect_ratio: str) -> float:
@@ -46,7 +47,7 @@ def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> s
         "-c:a", "aac", "-b:a", "128k",
         out_path,
     ]
-    result = run_text(cmd)
+    result = run_cancellable(cmd)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed cutting the clip: {result.stderr.strip()[-500:]}")
     return out_path
@@ -128,6 +129,8 @@ def _detect_face_path(cap, src_w: int, src_h: int, fps: float):
     frames, cxs, cys = [], [], []
     i = 0
     while True:
+        if i % 90 == 0:
+            jobs.checkpoint()
         if not cap.grab():
             break
         if i % step == 0:
@@ -187,7 +190,11 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str, mode: str 
     # Pass 1: smoothed camera path (centre of the crop window), sampled sparsely.
     sample_idx = path_x = path_y = None
     if mode != "center":
-        sample_idx, raw_x, raw_y, step = _detect_face_path(cap, src_w, src_h, fps)
+        try:
+            sample_idx, raw_x, raw_y, step = _detect_face_path(cap, src_w, src_h, fps)
+        except BaseException:
+            cap.release()  # on Windows an open capture would keep the file locked
+            raise
         sample_fps = fps / step
         path_x = _smooth_path(raw_x, sample_fps, DEADZONE_FRAC * crop_w)
         path_y = _smooth_path(raw_y, sample_fps, DEADZONE_FRAC * crop_h)
@@ -212,6 +219,8 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str, mode: str 
     n = 0
     try:
         while True:
+            if n % 90 == 0:
+                jobs.checkpoint()
             ret, frame = cap.read()
             if not ret:
                 break
@@ -226,6 +235,11 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str, mode: str 
         # ffmpeg exited early. A closed pipe is BrokenPipeError on POSIX but can surface as a
         # plain OSError (EINVAL) on Windows; either way its stderr is reported below.
         pass
+    except BaseException:  # cancelled or failed mid-render: don't leave ffmpeg running
+        proc.kill()
+        proc.wait()
+        proc.stderr.close()
+        raise
     finally:
         cap.release()
     err = proc.stderr.read().decode(errors="replace")
@@ -334,10 +348,18 @@ def _render_split(
         "-c:a", "aac", "-b:a", "128k",
         out_path,
     ]
-    result = run_text(cmd)
+    result = run_cancellable(cmd)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg split render failed: {result.stderr.strip()}")
     return out_path
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
 
 
 def crop_clip_local(
@@ -350,17 +372,18 @@ def crop_clip_local(
 ) -> str:
     """Cut + reframe one highlight, returning the local mp4 path."""
     layout = layout or Layout.from_config()
-    if layout.mode == "split":
-        return _render_split(source_path, start_time, end_time, aspect_ratio, out_path, layout)
-
     cut_path = out_path + ".cut.mp4"
     try:
+        if layout.mode == "split":
+            return _render_split(source_path, start_time, end_time, aspect_ratio, out_path, layout)
         _cut_subclip(source_path, start_time, end_time, cut_path)
         _reframe_vertical(cut_path, out_path, aspect_ratio, mode=layout.mode)
+        return out_path
+    except BaseException:
+        _remove_quietly(out_path)  # never leave a half-written clip behind (cancel or error)
+        raise
     finally:
-        if os.path.exists(cut_path):
-            os.remove(cut_path)
-    return out_path
+        _remove_quietly(cut_path)
 
 
 def crop_highlights_local(
@@ -375,9 +398,13 @@ def crop_highlights_local(
     layout = (layout or Layout.from_config()).validate()
     os.makedirs(out_dir, exist_ok=True)
     results: List[Dict] = []
+    total = len(highlights)
+    jobs.emit("render", "start", f"Rendering {total} clips", current=0, total=total)
     for i, h in enumerate(highlights, 1):
         out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
-        print(f"[clip/local] {i}/{len(highlights)}: {h.get('title', '(untitled)')}", flush=True)
+        print(f"[clip/local] {i}/{total}: {h.get('title', '(untitled)')}", flush=True)
+        jobs.checkpoint()
+        jobs.emit("render", "progress", h.get("title", ""), current=i - 1, total=total, clip=i)
         try:
             crop_clip_local(
                 source_path,
@@ -388,7 +415,10 @@ def crop_highlights_local(
                 layout=layout,
             )
             results.append({**h, "clip_url": out_path})
+            jobs.emit("render", "progress", h.get("title", ""), current=i, total=total, clip=i, path=out_path)
         except Exception as e:
             print(f"[clip/local] {i} failed: {e}", flush=True)
             results.append({**h, "clip_url": None, "error": str(e)})
+            jobs.emit("render", "warn", f"Clip {i} failed: {e}", current=i, total=total, clip=i)
+    jobs.emit("render", "done", f"{sum(1 for r in results if r.get('clip_url'))} of {total} clips rendered")
     return results
