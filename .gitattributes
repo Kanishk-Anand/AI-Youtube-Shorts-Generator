@@ -1,0 +1,8 @@
+# Windows scripts must keep CRLF line endings, even in a downloaded zip; never convert them.
+*.bat -text
+*.cmd -text
+*.ps1 -text
+# Unix scripts must keep LF.
+*.sh text eol=lf
+*.command text eol=lf
+shorts text eol=lf

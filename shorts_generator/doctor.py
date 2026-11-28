@@ -152,9 +152,14 @@ def check_llm() -> Result:
 
 
 def check_muapi() -> Result:
-    if config.MUAPI_API_KEY:
-        return OK, "MuAPI key (--mode api)", "set", ""
-    return WARN, "MuAPI key (--mode api)", "not set (only needed for --mode api)", "Add MUAPI_API_KEY to .env"
+    if not config.MUAPI_API_KEY:
+        return WARN, "MuAPI key (--mode api)", "not set (only needed for --mode api)", "Add MUAPI_API_KEY to .env"
+    try:
+        config.require_api_key()  # same placeholder / length checks the app applies
+    except RuntimeError:
+        return (WARN, "MuAPI key (--mode api)", "still a placeholder value (only needed for --mode api)",
+                "Put your real key in MUAPI_API_KEY in .env, or ignore this if you only use --mode local")
+    return OK, "MuAPI key (--mode api)", "set", ""
 
 
 def run_doctor() -> int:

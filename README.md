@@ -65,6 +65,31 @@ Don't want to self-host? The [AI Clipping API](https://muapi.ai/playground/ai-cl
 
 ## Installation (Self-Hosted)
 
+### Easy install (macOS and Windows)
+
+Download the project (**Code** > **Download ZIP**, then unzip it, or `git clone`), then:
+
+| | Do this |
+|---|---|
+| **macOS** | Double-click **`Install-Mac.command`**. The first time, right-click it and choose **Open**, because macOS blocks scripts downloaded from the internet. |
+| **Windows** | Double-click **`Install-Windows.bat`**. If Windows says it protected your PC, click **More info**, then **Run anyway**. |
+
+Prefer a terminal? `bash installers/install.sh` (macOS/Linux) or `powershell -ExecutionPolicy Bypass -File installers\install.ps1` (Windows).
+
+The installer needs no admin rights and is safe to re-run. It:
+
+1. installs [`uv`](https://docs.astral.sh/uv/) (a Python tool manager) if you don't have it;
+2. downloads Python 3.12 and creates a private environment in the project folder (`.venv`), so your system Python is never touched;
+3. installs the packages (about 400 MB on disk, so allow a few minutes);
+4. installs ffmpeg with Homebrew (macOS) or winget (Windows) if it's missing. Without Homebrew it tells you the command to run;
+5. creates `.env` from the example (an existing `.env` is never overwritten) and runs `--doctor` to confirm everything works.
+
+Then run the tool with the launcher in the project folder: `./shorts ...` on macOS, `.\shorts.cmd ...` on Windows. On macOS the installer also links `shorts` into `~/.local/bin`, so it works from any folder. To uninstall, delete the project folder (and `~/.local/bin/shorts` on macOS).
+
+For manual setup, or to understand each step, follow the steps below.
+
+### Manual install
+
 ### Prerequisites
 
 - Python 3.10 to 3.13 (3.12 recommended; newer versions often lack prebuilt wheels for `av`, `ctranslate2` and OpenCV)
@@ -402,6 +427,10 @@ AI-Youtube-Shorts-Generator/
 ├── requirements.txt              core deps (api mode)
 ├── requirements-local.txt        optional deps for --mode local and --critique
 ├── .env.example
+├── Install-Mac.command           double-click installer (macOS)
+├── Install-Windows.bat           double-click installer (Windows)
+├── shorts, shorts.cmd            launchers that use the installed environment (macOS / Windows)
+├── installers/                   install.sh (macOS/Linux) and install.ps1 (Windows)
 └── shorts_generator/
     ├── config.py                 env / settings (MuAPI + local LLM + Whisper + layout)
     ├── url_validation.py         only HTTPS YouTube URLs are accepted as remote sources
